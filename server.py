@@ -46,6 +46,9 @@ MAX_PORT_TRY = 50
 FORCE_CLICK_BEFORE_TYPE = True
 FOCUS_SETTLE_DELAY = 0.06
 
+# 只在切换窗口时点击一次，避免每次输入都把光标点回鼠标位置
+_LAST_FG_HWND = None
+
 CLEAR_BACKSPACE_MAX = 200
 TEST_INJECT_TEXT = "[SendInput Test] 123 ABC 中文 测试"
 
@@ -744,14 +747,30 @@ def execute_output(out):
 
 
 def focus_target():
+    global _LAST_FG_HWND
     if not FORCE_CLICK_BEFORE_TYPE:
         return
+
+    try:
+        current_hwnd = user32.GetForegroundWindow()
+    except Exception:
+        current_hwnd = None
+
+    # 同一个窗口重复输入时不再点击，避免光标被鼠标位置打乱
+    if current_hwnd and current_hwnd == _LAST_FG_HWND:
+        return
+
     try:
         x, y = pyautogui.position()
         pyautogui.click(x, y)
         time.sleep(FOCUS_SETTLE_DELAY)
     except Exception:
         pass
+    finally:
+        try:
+            _LAST_FG_HWND = user32.GetForegroundWindow()
+        except Exception:
+            _LAST_FG_HWND = current_hwnd
 
 
 _last_msg = ""
