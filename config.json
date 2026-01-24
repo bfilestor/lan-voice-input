@@ -9,17 +9,17 @@
       "args": ["-c", "4", "google.com"]
     },
     {
-      "name": "Network Diagnostics",
-      "description": "Run a series of network diagnostic commands to check connectivity and performance.",
-      "match-string": "traceroute",
-      "command": "traceroute",
-      "args": ["google.com"]
+      "name": "打开文件传输软件",
+      "description": "打开文件传输软件",
+      "match-string": "打开文件传输",
+      "command": "E:\\soft\\LocalSend\\localsend_app.exe",
+      "args": []
     },
     {
-      "name": "重启电脑",
-      "description": "重新启动电脑",
-      "match-string": "重启电脑",
-      "command": "shutdown -r  now",
+      "name": "打开opencode",
+      "description": "打开opencode",
+      "match-string": "打开Open code",
+      "command": "E:\\soft\\opencode\\opencode.exe",
       "args": []
     }
   ]

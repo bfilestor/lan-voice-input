@@ -775,25 +775,29 @@ def focus_target():
 
 _last_msg = ""
 _last_time = 0.0
+_last_mode = ""
 
 
-def server_dedup(text: str) -> bool:
-    global _last_msg, _last_time
+def server_dedup(text: str, mode: str = "text") -> bool:
+    global _last_msg, _last_time, _last_mode
     now = time.time()
-    if text == _last_msg and (now - _last_time) < SERVER_DEDUP_WINDOW_SEC:
+    if text == _last_msg and mode == _last_mode and (now - _last_time) < SERVER_DEDUP_WINDOW_SEC:
         return True
     _last_msg = text
+    _last_mode = mode
     _last_time = now
     return False
 
 
-def handle_text(text: str):
+def handle_text(text: str, mode: str = "text"):
     text = (text or "").strip()
     if not text:
         return
 
-    if server_dedup(text):
-        print("⏭️ 服务器去重：", text)
+    mode = (mode or "text").strip() or "text"
+
+    if server_dedup(text, mode):
+        print(f"⏭️ 服务器去重({mode})：", text)
         return
 
     if text == "__TEST_INJECT__":
@@ -807,6 +811,16 @@ def handle_text(text: str):
             notify("测试注入成功", "请查看记事本是否出现两行测试文本。")
         except Exception as e:
             notify("测试注入失败", str(e))
+        return
+
+    # 文本模式：不执行语音指令，直接落入光标
+    if mode != "cmd":
+        if processor.paused:
+            notify("指令执行", f"⏸(暂停中) {text}")
+            return
+        focus_target()
+        execute_output(text)
+        processor.record_output(text)
         return
 
     result = processor.handle(text)
@@ -843,7 +857,6 @@ def _match_command(text: str) -> Optional[dict]:
         if match_string and match_string == text:
             return cmd
     return None
-
 
 def execute_command(text: str) -> CommandResult:
     cmd = _match_command(text)
@@ -897,16 +910,20 @@ async def ws_handler(websocket):
                     content = msg
 
             if msg_type == "cmd":
-                result = execute_command(str(content or "").strip())
-                resp = {
-                    "type": "cmd_result",
-                    "string": str(content or "").strip(),
-                    "ok": bool(result.output.get("ok")) if isinstance(result.output, dict) else False,
-                    "message": result.output.get("message") if isinstance(result.output, dict) else result.display_text,
-                }
-                await websocket.send(json.dumps(resp, ensure_ascii=False))
+                text_cmd = str(content or "").strip()
+                if _match_command(text_cmd):
+                    result = execute_command(text_cmd)
+                    resp = {
+                        "type": "cmd_result",
+                        "string": text_cmd,
+                        "ok": bool(result.output.get("ok")) if isinstance(result.output, dict) else False,
+                        "message": result.output.get("message") if isinstance(result.output, dict) else result.display_text,
+                    }
+                    await websocket.send(json.dumps(resp, ensure_ascii=False))
+                else:
+                    handle_text(text_cmd, mode="cmd")
             else:
-                handle_text(str(content or ""))
+                handle_text(str(content or ""), mode="text")
 
     except (ConnectionClosedOK, ConnectionClosedError, ConnectionClosed, ConnectionResetError, OSError):
         pass
