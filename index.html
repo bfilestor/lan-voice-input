@@ -18,6 +18,12 @@
     .mode-btn.active { background: #ffe5d6; border-color: #f6a17c; color: #7a2b12; }
     .action-btn { background: #fff; border-color: #cfcfcf; }
     .action-btn:hover { background: #f2f2f2; }
+    .clipboard-panel { display: none; position: relative; margin-top: 14px; padding: 14px 16px 16px; border-radius: 14px; background: #f4f4f4; border: 1px solid #d8d8d8; box-shadow: inset 4px 4px 10px rgba(0,0,0,0.12), inset -4px -4px 10px rgba(255,255,255,0.8); }
+    .clipboard-title { font-weight: 600; margin-bottom: 6px; color: #333; }
+    .clipboard-text { white-space: pre-wrap; word-break: break-word; color: #222; font-size: 15px; line-height: 1.6; user-select: text; }
+    .clipboard-hint { margin-top: 8px; font-size: 12px; color: #666; }
+    .clip-close { position: absolute; right: 10px; top: 10px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #c0c0c0; background: linear-gradient(145deg, #fefefe, #dcdcdc); box-shadow: 0 2px 4px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; font-weight: 700; color: #555; }
+    .clip-close:active { transform: translateY(1px); }
   </style>
 </head>
 <body>
@@ -40,6 +46,12 @@
   </div>
 
   <div class="status" id="status">状态：未连接</div>
+  <div id="clipboardPanel" class="clipboard-panel">
+    <div id="clipboardClose" class="clip-close" aria-label="关闭">×</div>
+    <div class="clipboard-title">服务器剪贴板</div>
+    <div id="clipboardText" class="clipboard-text"></div>
+    <div class="clipboard-hint">长按/双击复制，关闭后等待下一次推送自动再显示</div>
+  </div>
   <div id="log"></div>
 
 <script>
@@ -52,6 +64,9 @@ let lastSentText = "";
 let lastSentMsg = "";
 let lastSentTime = 0;
 const DUP_WINDOW_MS = 1500;
+const clipboardPanel = document.getElementById("clipboardPanel");
+const clipboardText = document.getElementById("clipboardText");
+const clipboardClose = document.getElementById("clipboardClose");
 
 function log(msg){
   const el = document.getElementById("log");
@@ -114,9 +129,16 @@ async function connectWS(){
       const data = JSON.parse(event.data);
       if(data && data.type === "cmd_result"){
         log("✅ 收到命令结果：" + data.message);
+      }else if(data && data.type === "clipboard"){
+        showClipboard(data.string || "");
+        log("🧲 收到服务器推送的剪贴板内容");
+        if((data.string || "").trim()){
+          const preview = data.string.length > 80 ? data.string.slice(0,80) + "..." : data.string;
+          log("📥 剪贴板预览：" + preview);
+        }
       }
     }catch(e){
-      // ignore non-JSON
+      log("⚠️ 非 JSON 消息或解析失败：" + e);
     }
   };
 }
@@ -196,6 +218,22 @@ function flushDelta(){
     log("✏️ 检测到编辑历史内容：请点【手动发送】发送全文（自动增量暂停）");
   }
 }
+
+function showClipboard(content){
+  const text = (content || "").trim();
+  if(!text){
+    clipboardPanel.style.display = "none";
+    log("ℹ️ 收到空剪贴板内容，隐藏面板");
+    return;
+  }
+  clipboardText.textContent = text;
+  clipboardPanel.style.display = "block";
+  log("📌 剪贴板面板已显示，可长按复制");
+}
+
+clipboardClose.onclick = () => {
+  clipboardPanel.style.display = "none";
+};
 </script>
 </body>
 </html>

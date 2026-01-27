@@ -14,7 +14,7 @@ import tkinter as tk
 from ctypes import wintypes
 from dataclasses import dataclass
 from tkinter import ttk
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set
 import shlex
 
 import pyautogui
@@ -68,6 +68,8 @@ tray_icon = None
 
 CLIENT_COUNT = 0
 CLIENT_LOCK = threading.Lock()
+WS_CLIENTS: Set[websockets.WebSocketServerProtocol] = set()
+WS_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 # ✅ 用户手动选择的 IP（None = 自动）
 USER_IP: Optional[str] = None
@@ -572,6 +574,7 @@ if not hasattr(wintypes, "ULONG_PTR"):
     wintypes.ULONG_PTR = ctypes.c_size_t
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
@@ -662,6 +665,80 @@ def backspace(n: int):
 
 def press_enter():
     press_vk(VK_RETURN, times=1)
+
+
+# ===================== 剪贴板读取 =====================
+def get_clipboard_text() -> str:
+    """Best-effort read clipboard text with small retries and detailed logs."""
+    CF_UNICODETEXT = 13
+    CF_TEXT = 1
+
+    def _read_handle(handle, is_unicode=False):
+        if not handle:
+            return "", 0
+        size = kernel32.GlobalSize(handle)
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return "", size
+        try:
+            if size:
+                raw = ctypes.string_at(ptr, size)
+            else:
+                # 有些应用返回 0 size，但数据仍可读（例如延迟渲染/特殊分配）
+                raw = ctypes.string_at(ptr)  # 读取到首个 \0
+        finally:
+            kernel32.GlobalUnlock(handle)
+
+        if is_unicode:
+            try:
+                text = raw.decode("utf-16-le").rstrip("\x00")
+                return text, size if size else len(text) * 2
+            except Exception:
+                return "", size
+        else:
+            for enc in ("utf-8", "gbk", sys.getdefaultencoding()):
+                try:
+                    text = raw.decode(enc).rstrip("\x00")
+                    return text, size if size else len(text)
+                except Exception:
+                    continue
+            return raw.decode("utf-8", errors="ignore").rstrip("\x00"), size
+
+    for _ in range(5):
+        opened = user32.OpenClipboard(None)
+        if not opened:
+            time.sleep(0.05)
+            continue
+        try:
+            if user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+                txt, _size = _read_handle(user32.GetClipboardData(CF_UNICODETEXT), is_unicode=True)
+                if txt:
+                    return txt
+            elif user32.IsClipboardFormatAvailable(CF_TEXT):
+                txt, _size = _read_handle(user32.GetClipboardData(CF_TEXT), is_unicode=False)
+                if txt:
+                    return txt
+            else:
+                return ""
+        except Exception:
+            pass
+        finally:
+            try:
+                user32.CloseClipboard()
+            except Exception:
+                pass
+        time.sleep(0.05)
+    # Powershell 兜底：有些应用（远程桌面/沙盒）返回不可锁定的句柄，尝试系统 Get-Clipboard
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+            text=True, stderr=subprocess.STDOUT, timeout=3
+        )
+        if out:
+            return out
+    except Exception:
+        pass
+    return ""
 
 
 # ===================== 指令系统 =====================
@@ -883,20 +960,55 @@ def execute_command(text: str) -> CommandResult:
 
 
 # ===================== WebSocket =====================
+async def broadcast_json(payload: dict):
+    if not WS_CLIENTS:
+        return
+
+    data = json.dumps(payload, ensure_ascii=False)
+    stale = []
+    for ws in list(WS_CLIENTS):
+        if ws.closed:
+            stale.append(ws)
+            continue
+        try:
+            await ws.send(data)
+        except Exception as e:
+            print(f"[broadcast] send failed: {e}")
+            stale.append(ws)
+
+    for ws in stale:
+        WS_CLIENTS.discard(ws)
+    if stale:
+        print(f"[broadcast] removed stale clients: {len(stale)}")
+
+
+def schedule_broadcast(payload: dict) -> bool:
+    loop = WS_LOOP
+    if not loop or not loop.is_running():
+        return False
+    try:
+        asyncio.run_coroutine_threadsafe(broadcast_json(payload), loop)
+        return True
+    except Exception:
+        return False
+
+
 async def ws_handler(websocket):
-    global CLIENT_COUNT
+    global CLIENT_COUNT, WS_CLIENTS
 
     with CLIENT_LOCK:
         CLIENT_COUNT += 1
         c = CLIENT_COUNT
     notify("手机已连接", f"连接数：{c}（HTTP:{HTTP_PORT} WS:{WS_PORT}）")
+    WS_CLIENTS.add(websocket)
+    print(f"[ws] client connected, total={len(WS_CLIENTS)}")
 
     try:
         async for msg in websocket:
             msg = msg.strip()
             if not msg:
                 continue
-            print("收到：", msg)
+            print("[ws] 收到：", msg)
             msg_type = "text"
             content = msg
             if msg.startswith("{"):
@@ -929,13 +1041,18 @@ async def ws_handler(websocket):
         pass
 
     finally:
+        WS_CLIENTS.discard(websocket)
         with CLIENT_LOCK:
             CLIENT_COUNT -= 1
             c = CLIENT_COUNT
         notify("手机已断开", f"连接数：{c}")
+        print(f"[ws] client disconnected, total={len(WS_CLIENTS)}")
 
 
 async def ws_main():
+    global WS_LOOP
+    WS_LOOP = asyncio.get_running_loop()
+    print("[ws] event loop set, starting websocket server")
     async with websockets.serve(
         ws_handler, "0.0.0.0", WS_PORT,
         ping_interval=WS_PING_INTERVAL,
@@ -969,6 +1086,21 @@ def tray_show_qr(icon, _):
     qr_mgr.show()
 
 
+def tray_send_clipboard(icon, _):
+    text = (get_clipboard_text() or "").strip()
+    if not text:
+        print("[clipboard] empty or unreadable clipboard")
+        notify("剪贴板发送", "剪贴板为空或无法读取")
+        return
+
+    preview = text if len(text) < 50 else (text[:50] + "...")
+    ok = schedule_broadcast({"type": "clipboard", "string": text})
+    if ok:
+        notify("剪贴板发送", "已发送到网页，可在手机端复制")
+    else:
+        notify("剪贴板发送失败", "WebSocket 未运行或无连接")
+
+
 def tray_quit(icon, _):
     notify("退出", "LAN Voice Input 已退出")
     icon.stop()
@@ -980,6 +1112,7 @@ def run_tray():
     imagePath = resource_path("icon.ico")
     menu = (
         item("显示二维码", tray_show_qr),
+        item("发送剪贴板到网页", tray_send_clipboard),
         item("退出", tray_quit),
     )
     tray_icon = pystray.Icon("LANVoiceInput", Image.open(imagePath), "LAN Voice Input", menu)
