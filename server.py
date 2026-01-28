@@ -853,7 +853,9 @@ def focus_target():
 _last_msg = ""
 _last_time = 0.0
 _last_mode = ""
-
+CLIPBOARD_LAST_TEXT = ""
+CLIPBOARD_LAST_TIME = 0.0
+CLIPBOARD_DEDUP_SEC = 1.0
 
 def server_dedup(text: str, mode: str = "text") -> bool:
     global _last_msg, _last_time, _last_mode
@@ -1087,11 +1089,21 @@ def tray_show_qr(icon, _):
 
 
 def tray_send_clipboard(icon, _):
+    global CLIPBOARD_LAST_TEXT, CLIPBOARD_LAST_TIME
+
     text = (get_clipboard_text() or "").strip()
     if not text:
         print("[clipboard] empty or unreadable clipboard")
         notify("剪贴板发送", "剪贴板为空或无法读取")
         return
+
+    now = time.time()
+    if text == CLIPBOARD_LAST_TEXT and (now - CLIPBOARD_LAST_TIME) < CLIPBOARD_DEDUP_SEC:
+        # 双击或短时间重复触发，直接忽略
+        return
+
+    CLIPBOARD_LAST_TEXT = text
+    CLIPBOARD_LAST_TIME = now
 
     preview = text if len(text) < 50 else (text[:50] + "...")
     ok = schedule_broadcast({"type": "clipboard", "string": text})
@@ -1111,12 +1123,12 @@ def run_tray():
     global tray_icon
     imagePath = resource_path("icon.ico")
     menu = (
+        item("发送剪贴板到网页", tray_send_clipboard, default=True),
         item("显示二维码", tray_show_qr),
-        item("发送剪贴板到网页", tray_send_clipboard),
         item("退出", tray_quit),
     )
     tray_icon = pystray.Icon("LANVoiceInput", Image.open(imagePath), "LAN Voice Input", menu)
-    tray_icon.on_double_click = tray_show_qr
+    # Windows 下单击默认触发菜单 default 项，设置 default=True 即可生效
     tray_icon.run()
 
 
@@ -1143,7 +1155,7 @@ if __name__ == "__main__":
     threading.Thread(target=run_http, daemon=True).start()
     threading.Thread(target=lambda: asyncio.run(ws_main()), daemon=True).start()
 
-    notify("LANVoiceInput 启动成功", f"HTTP:{HTTP_PORT}  WS:{WS_PORT}\n双击托盘图标显示二维码")
+    notify("LANVoiceInput 启动成功", f"HTTP:{HTTP_PORT}  WS:{WS_PORT}\n单击托盘图标快速发送剪贴板到网页\n右键托盘菜单可显示二维码")
     # ✅ 启动后自动打开二维码窗口（加一点延迟更稳）
     threading.Timer(0.3, qr_mgr.show).start()
 
