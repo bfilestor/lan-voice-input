@@ -19,11 +19,14 @@
     .action-btn { background: #fff; border-color: #cfcfcf; }
     .action-btn:hover { background: #f2f2f2; }
     .clipboard-panel { display: none; position: relative; margin-top: 14px; padding: 14px 16px 16px; border-radius: 14px; background: #f4f4f4; border: 1px solid #d8d8d8; box-shadow: inset 4px 4px 10px rgba(0,0,0,0.12), inset -4px -4px 10px rgba(255,255,255,0.8); }
-    .clipboard-title { font-weight: 600; margin-bottom: 6px; color: #333; }
+    .clipboard-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .clipboard-title { font-weight: 600; color: #333; }
     .clipboard-text { white-space: pre-wrap; word-break: break-word; color: #222; font-size: 15px; line-height: 1.6; user-select: text; }
     .clipboard-hint { margin-top: 8px; font-size: 12px; color: #666; }
     .clip-close { position: absolute; right: 10px; top: 10px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #c0c0c0; background: linear-gradient(145deg, #fefefe, #dcdcdc); box-shadow: 0 2px 4px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; font-weight: 700; color: #555; }
     .clip-close:active { transform: translateY(1px); }
+    .clip-btn { position: relative; top: -10px; border: 1px solid #c0c0c0; background: linear-gradient(145deg, #fefefe, #dcdcdc); box-shadow: 0 2px 4px rgba(0,0,0,0.12); border-radius: 12px; padding: 6px 10px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; color: #444; }
+    .clip-btn:active { transform: translateY(1px); }
   </style>
 </head>
 <body>
@@ -47,10 +50,12 @@
 
   <div class="status" id="status">状态：未连接</div>
   <div id="clipboardPanel" class="clipboard-panel">
-    <div id="clipboardClose" class="clip-close" aria-label="关闭">×</div>
-    <div class="clipboard-title">服务器剪贴板</div>
+    <div class="clipboard-header">
+      <button id="clipboardCopyBtn" class="clip-btn" aria-label="复制服务器剪贴板">📋 复制</button>
+      <div id="clipboardClose" class="clip-close" aria-label="关闭">×</div>
+    </div>
     <div id="clipboardText" class="clipboard-text"></div>
-    <div class="clipboard-hint">长按/双击复制，关闭后等待下一次推送自动再显示</div>
+    <div class="clipboard-hint">点击标题按钮即可复制，关闭后等待下一次推送自动再显示</div>
   </div>
   <div id="log"></div>
 
@@ -67,6 +72,7 @@ const DUP_WINDOW_MS = 1500;
 const clipboardPanel = document.getElementById("clipboardPanel");
 const clipboardText = document.getElementById("clipboardText");
 const clipboardClose = document.getElementById("clipboardClose");
+const clipboardCopyBtn = document.getElementById("clipboardCopyBtn");
 
 function log(msg){
   const el = document.getElementById("log");
@@ -189,6 +195,30 @@ document.getElementById("clearBtn").onclick = () => {
 document.getElementById("testBtn").onclick = () => {
   log("🧪 发送测试注入指令：请把鼠标放在记事本输入区");
   sendText("__TEST_INJECT__");
+};
+
+clipboardCopyBtn.onclick = async () => {
+  const text = clipboardText.textContent || "";
+  if(!text.trim()){
+    log("ℹ️ 没有可复制的服务器剪贴板内容");
+    return;
+  }
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text);
+    }else{
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(clipboardText);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("copy");
+      sel.removeAllRanges();
+    }
+    log("✅ 已复制服务器剪贴板内容");
+  }catch(e){
+    log("⚠️ 复制失败：" + e);
+  }
 };
 
 document.getElementById("modeTextBtn").onclick = () => setMode("text");
