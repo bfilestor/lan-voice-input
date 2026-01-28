@@ -579,7 +579,7 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
-
+WM_CHAR = 0x0102
 VK_BACK = 0x08
 VK_RETURN = 0x0D
 
@@ -625,6 +625,52 @@ class INPUT(ctypes.Structure):
     _anonymous_ = ("union",)
     _fields_ = [("type", wintypes.DWORD), ("union", _INPUTunion)]
 
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT),
+    ]
+
+
+def _get_focus_hwnd() -> Optional[int]:
+    """获取当前具有键盘焦点的窗口（优先精确控件，失败则退化为前台窗口）。"""
+    info = GUITHREADINFO()
+    info.cbSize = ctypes.sizeof(GUITHREADINFO)
+    try:
+        if user32.GetGUIThreadInfo(0, ctypes.byref(info)):
+            return info.hwndFocus or info.hwndActive or user32.GetForegroundWindow()
+    except Exception:
+        pass
+    try:
+        return user32.GetForegroundWindow()
+    except Exception:
+        return None
+
+
+def _try_post_chars(text: str) -> bool:
+    """
+    优先通过 PostMessage(WM_CHAR) 直接把字符送入当前焦点控件。
+    在记事本中 SendInput 会出现“首字符丢失/替换”的问题，WM_CHAR 注入更稳定。
+    """
+    hwnd = _get_focus_hwnd()
+    if not hwnd:
+        return False
+    ok = True
+    for ch in text:
+        code = ord(ch)
+        if code > 0xFFFF:
+            return False  # 16 位之外的码位交给 SendInput 处理
+        if user32.PostMessageW(hwnd, WM_CHAR, code, 0) == 0:
+            ok = False
+    return ok
+
 
 def _send_input(inputs):
     n = len(inputs)
@@ -637,7 +683,16 @@ def _send_input(inputs):
 
 
 def send_unicode_text(text: str):
+    text = text or ""
+    if not text:
+        return
+
+    # 先尝试 WM_CHAR 注入，解决记事本里首字符被吞的问题
+    if _try_post_chars(text):
+        return
+
     inputs = []
+    print("⌨️ 输入文本：", text)
     for ch in text:
         code = ord(ch)
         inputs.append(INPUT(
